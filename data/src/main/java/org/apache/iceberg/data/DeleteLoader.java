@@ -18,13 +18,14 @@
  */
 package org.apache.iceberg.data;
 
+import java.util.List;
 import org.apache.iceberg.DeleteFile;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.StructLike;
 import org.apache.iceberg.deletes.PositionDeleteIndex;
-import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
-import org.apache.iceberg.util.StructLikeMap;
+import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.util.Pair;
 import org.apache.iceberg.util.StructLikeSet;
 
 /** An API for loading delete file content into in-memory data structures. */
@@ -39,37 +40,25 @@ public interface DeleteLoader {
   StructLikeSet loadEqualityDeletes(Iterable<DeleteFile> deleteFiles, Schema projection);
 
   /**
-   * Loads the content of equality delete files into a map of delete key to the highest data
-   * sequence number among the delete files that contain that key.
+   * Loads the content of multiple equality delete files at once, each with its own projection,
+   * keeping each delete file's content separate rather than merging it into a single set.
    *
-   * <p>Unlike {@link #loadEqualityDeletes}, the sequence number lets a caller determine whether a
-   * given delete actually applies to a specific data file (only deletes with a sequence number
-   * greater than the data file's data sequence number apply). This is useful when the result is
-   * shared across multiple data files, e.g. all the data files in a scan task group, since not
-   * every delete file is necessarily applicable to every one of those data files.
+   * <p>The default implementation calls {@link #loadEqualityDeletes(Iterable, Schema)} once per
+   * delete file. Override this method to provide a more efficient implementation, e.g. one that
+   * loads all delete files in a single batch.
    *
-   * <p>The default implementation calls {@link #loadEqualityDeletes} once per delete file. Override
-   * this method to provide a more efficient implementation, e.g. one that loads all delete files in
-   * a single batch.
-   *
-   * @param deleteFiles equality delete files
-   * @param projection a projection of columns to load
-   * @return a map of equality delete keys to the max data sequence number of their delete files
+   * @param deleteFiles equality delete files, each paired with the projection to load it with
+   * @return each delete file paired with its own loaded content
    */
-  default StructLikeMap<Long> loadEqualityDeletesBySequenceNumber(
-      Iterable<DeleteFile> deleteFiles, Schema projection) {
-    StructLikeMap<Long> deletes = StructLikeMap.create(projection.asStruct());
-    for (DeleteFile deleteFile : deleteFiles) {
-      Long dataSequenceNumber = deleteFile.dataSequenceNumber();
-      Preconditions.checkArgument(
-          dataSequenceNumber != null,
-          "Equality delete file has no data sequence number: %s",
-          deleteFile.location());
-      for (StructLike key : loadEqualityDeletes(ImmutableList.of(deleteFile), projection)) {
-        deletes.merge(key, dataSequenceNumber, Math::max);
-      }
+  default Iterable<Pair<DeleteFile, Iterable<StructLike>>> loadEqualityDeletes(
+      Iterable<Pair<DeleteFile, Schema>> deleteFiles) {
+    List<Pair<DeleteFile, Iterable<StructLike>>> loaded = Lists.newArrayList();
+    for (Pair<DeleteFile, Schema> pair : deleteFiles) {
+      Iterable<StructLike> deletes =
+          loadEqualityDeletes(ImmutableList.of(pair.first()), pair.second());
+      loaded.add(Pair.of(pair.first(), deletes));
     }
-    return deletes;
+    return loaded;
   }
 
   /**

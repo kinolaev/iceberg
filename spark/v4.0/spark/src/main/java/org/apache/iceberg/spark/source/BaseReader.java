@@ -23,7 +23,6 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -42,6 +41,7 @@ import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.data.BaseDeleteLoader;
 import org.apache.iceberg.data.DeleteFilter;
 import org.apache.iceberg.data.DeleteLoader;
+import org.apache.iceberg.data.EqualityDeletes;
 import org.apache.iceberg.deletes.DeleteCounter;
 import org.apache.iceberg.encryption.EncryptingFileIO;
 import org.apache.iceberg.io.CloseableIterator;
@@ -54,7 +54,6 @@ import org.apache.iceberg.spark.SparkSchemaUtil;
 import org.apache.iceberg.spark.SparkUtil;
 import org.apache.iceberg.types.Types.StructType;
 import org.apache.iceberg.util.PartitionUtil;
-import org.apache.iceberg.util.StructLikeMap;
 import org.apache.spark.rdd.InputFileBlockHolder;
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.slf4j.Logger;
@@ -215,20 +214,20 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
     SparkDeleteFilter(
         String filePath,
+        Long dataSequenceNumber,
         List<DeleteFile> deletes,
+        EqualityDeletes sharedEqDeletes,
         DeleteCounter counter,
-        boolean needRowPosCol,
-        List<Map<Set<Integer>, StructLikeMap<Long>>> eqDeletesCaches,
-        long dataSequenceNumber) {
+        boolean needRowPosCol) {
       super(
           filePath,
+          dataSequenceNumber,
           deletes,
-          tableSchema,
+          sharedEqDeletes,
+          tableSchema::findField,
           expectedSchema,
           counter,
-          needRowPosCol,
-          eqDeletesCaches,
-          dataSequenceNumber);
+          needRowPosCol);
       this.asStructLike =
           new InternalRowWrapper(
               SparkSchemaUtil.convert(requiredSchema()), requiredSchema().asStruct());
