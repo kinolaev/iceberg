@@ -43,6 +43,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.Multimaps;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 import org.apache.iceberg.types.TypeUtil;
 import org.apache.iceberg.types.Types;
+import org.apache.iceberg.util.StructLikeMap;
 import org.apache.iceberg.util.StructLikeSet;
 import org.apache.iceberg.util.StructProjection;
 import org.slf4j.Logger;
@@ -74,6 +75,49 @@ public abstract class DeleteFilter<T> {
       DeleteCounter counter,
       boolean needRowPosCol) {
     this(filePath, deletes, tableSchema::findField, expectedSchema, counter, needRowPosCol);
+  }
+
+  /**
+   * Creates a filter scoped to a single data file that reuses equality deletes already loaded
+   * elsewhere, e.g. by another filter covering the same scan task group.
+   *
+   * <p>{@code eqDeletesCaches} may contain more than one map when equality deletes come from
+   * different scopes that must not be merged together, e.g. one map for global (unpartitioned)
+   * equality deletes and another for deletes scoped to this data file's specific partition. Each
+   * map is treated as an independent source: a record is considered deleted if any group in any
+   * of the maps matches with a sequence number greater than {@code dataSequenceNumber}.
+   *
+   * @param dataSequenceNumber the data sequence number of the data file this filter is scoped to.
+   *     Only equality deletes with a greater sequence number are treated as applicable. This
+   *     matters because {@code eqDeletesCaches} may include deletes that apply to other data files
+   *     sharing the same cache (e.g. other partitions, for global deletes) but not to this one.
+   * @param eqDeletesCaches equality deletes already loaded, keyed by equality field IDs within
+   *     each map, as returned by {@link #loadEqualityDeletes()}.
+   */
+  protected DeleteFilter(
+      String filePath,
+      List<DeleteFile> deletes,
+      Schema tableSchema,
+      Schema expectedSchema,
+      DeleteCounter counter,
+      boolean needRowPosCol,
+      List<Map<Set<Integer>, StructLikeMap<Long>>> eqDeletesCaches,
+      long dataSequenceNumber) {
+    this(filePath, deletes, tableSchema, expectedSchema, counter, needRowPosCol);
+
+    isInDeleteSets = Lists.newArrayList();
+    for (Map<Set<Integer>, StructLikeMap<Long>> eqDeletes : eqDeletesCaches) {
+      for (Map.Entry<Set<Integer>, StructLikeMap<Long>> entry : eqDeletes.entrySet()) {
+        Schema deleteSchema = TypeUtil.selectInIdOrder(requiredSchema, entry.getKey());
+        StructProjection projectRow = StructProjection.create(requiredSchema, deleteSchema);
+        StructLikeMap<Long> deleteMap = entry.getValue();
+        isInDeleteSets.add(
+            record -> {
+              Long deleteSequenceNumber = deleteMap.get(projectRow.wrap(asStructLike(record)));
+              return deleteSequenceNumber != null && deleteSequenceNumber > dataSequenceNumber;
+            });
+      }
+    }
   }
 
   protected DeleteFilter(
@@ -187,6 +231,32 @@ public abstract class DeleteFilter<T> {
 
   public CloseableIterable<T> filter(CloseableIterable<T> records) {
     return applyEqDeletes(applyPosDeletes(records));
+  }
+
+  /**
+   * Loads this filter's equality deletes, grouped by the set of equality field IDs they use.
+   *
+   * <p>The result can be passed to other filters scoped to individual data files within the same
+   * scan task group (via their constructor) so that equality deletes shared across those files are
+   * loaded only once, while position deletes and applicability checks remain scoped to each
+   * individual file.
+   */
+  public Map<Set<Integer>, StructLikeMap<Long>> loadEqualityDeletes() {
+    Multimap<Set<Integer>, DeleteFile> filesByDeleteIds =
+        Multimaps.newMultimap(Maps.newHashMap(), Lists::newArrayList);
+    for (DeleteFile delete : eqDeletes) {
+      filesByDeleteIds.put(Sets.newHashSet(delete.equalityFieldIds()), delete);
+    }
+
+    Map<Set<Integer>, StructLikeMap<Long>> deletesByFieldIds = Maps.newHashMap();
+    for (Map.Entry<Set<Integer>, Collection<DeleteFile>> entry :
+        filesByDeleteIds.asMap().entrySet()) {
+      Set<Integer> ids = entry.getKey();
+      Schema deleteSchema = TypeUtil.selectInIdOrder(requiredSchema, ids);
+      deletesByFieldIds.put(
+          ids, deleteLoader().loadEqualityDeletesBySequenceNumber(entry.getValue(), deleteSchema));
+    }
+    return deletesByFieldIds;
   }
 
   private List<Predicate<T>> applyEqDeletes() {

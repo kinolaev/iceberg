@@ -47,6 +47,8 @@ import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.types.TypeUtil;
 import org.apache.iceberg.util.CharSequenceMap;
 import org.apache.iceberg.util.ContentFileUtil;
+import org.apache.iceberg.util.Pair;
+import org.apache.iceberg.util.StructLikeMap;
 import org.apache.iceberg.util.StructLikeSet;
 import org.apache.iceberg.util.Tasks;
 import org.apache.iceberg.util.ThreadPools;
@@ -103,6 +105,25 @@ public class BaseDeleteLoader implements DeleteLoader {
     StructLikeSet deleteSet = StructLikeSet.create(projection.asStruct());
     Iterables.addAll(deleteSet, Iterables.concat(deletes));
     return deleteSet;
+  }
+
+  @Override
+  public StructLikeMap<Long> loadEqualityDeletesBySequenceNumber(
+      Iterable<DeleteFile> deleteFiles, Schema projection) {
+    Iterable<Pair<DeleteFile, Iterable<StructLike>>> deletesByFile =
+        execute(deleteFiles, file -> Pair.of(file, getOrReadEqDeletes(file, projection)));
+    StructLikeMap<Long> deletes = StructLikeMap.create(projection.asStruct());
+    for (Pair<DeleteFile, Iterable<StructLike>> pair : deletesByFile) {
+      Long dataSequenceNumber = pair.first().dataSequenceNumber();
+      Preconditions.checkArgument(
+          dataSequenceNumber != null,
+          "Equality delete file has no data sequence number: %s",
+          pair.first().location());
+      for (StructLike key : pair.second()) {
+        deletes.merge(key, dataSequenceNumber, Math::max);
+      }
+    }
+    return deletes;
   }
 
   private Iterable<StructLike> getOrReadEqDeletes(DeleteFile deleteFile, Schema projection) {
