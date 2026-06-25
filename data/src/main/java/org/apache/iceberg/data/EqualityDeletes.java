@@ -54,6 +54,9 @@ public class EqualityDeletes {
       Set<Integer> ids,
       Schema deleteSchema,
       Iterable<StructLike> deleteKeys) {
+    if (deleteFile.location() != null && !loadedEqDeletes.add(deleteFile.location())) {
+      return get(deleteFile, ids);
+    }
     Preconditions.checkArgument(
         deleteFile.dataSequenceNumber() != null,
         "Equality delete file has no data sequence number: %s",
