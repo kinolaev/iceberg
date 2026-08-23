@@ -24,7 +24,7 @@ if (jdkVersion != '17' && jdkVersion != '21') {
 def flinkVersions = (System.getProperty("flinkVersions") != null ? System.getProperty("flinkVersions") : System.getProperty("defaultFlinkVersions")).split(",")
 def sparkVersions = (System.getProperty("sparkVersions") != null ? System.getProperty("sparkVersions") : System.getProperty("defaultSparkVersions")).split(",")
 def scalaVersion = System.getProperty("scalaVersion") != null ? System.getProperty("scalaVersion") : System.getProperty("defaultScalaVersion")
-def jmhProjects = [project(":iceberg-core"), project(":iceberg-data")]
+def jmhProjects = [project(":iceberg-core"), project(":iceberg-data"), project(":iceberg-parquet")]
 
 if (flinkVersions.contains("1.20")) {
   jmhProjects.add(project(":iceberg-flink:iceberg-flink-1.20"))
@@ -85,4 +85,23 @@ configure(jmhProjects) {
   }
 
   tasks.jmh.finalizedBy tasks.jmhReport
+}
+
+project(':iceberg-parquet') {
+  dependencies {
+    // used by LoadPositionDeletesCachedBenchmark/LoadPositionDeletesCachedParallelBenchmark/
+    // LoadPositionDeletesUncachedBenchmark/LoadPositionDeletesUncachedParallelBenchmark to read
+    // and write real delete files against a real S3-compatible store; iceberg-aws only declares
+    // the AWS SDK as compileOnly, so consumers must add it explicitly
+    jmhImplementation project(':iceberg-aws')
+    jmhImplementation platform(libs.awssdk.bom)
+    jmhImplementation 'software.amazon.awssdk:s3'
+    jmhImplementation 'software.amazon.awssdk:kms'
+    jmhImplementation 'software.amazon.awssdk:glue'
+    jmhImplementation 'software.amazon.awssdk:sts'
+    jmhImplementation 'software.amazon.awssdk:dynamodb'
+    jmhImplementation 'software.amazon.awssdk:lakeformation'
+    jmhImplementation 'software.amazon.awssdk:auth'
+    jmhImplementation 'software.amazon.awssdk:url-connection-client'
+  }
 }
