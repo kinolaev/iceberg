@@ -307,6 +307,11 @@ class DynamicCommitter implements Committer<DynamicCommittable> {
       List<WriteResult> writeResults = e.getValue();
 
       RowDelta rowDelta = table.newRowDelta().scanManifestsWith(workerPool);
+      Snapshot startingSnapshot = table.snapshot(branch);
+      if (startingSnapshot != null) {
+        rowDelta.validateFromSnapshot(startingSnapshot.snapshotId());
+      }
+
       for (WriteResult result : writeResults) {
         // Row delta validations are not needed for streaming changes that write equality deletes.
         // Equality deletes are applied to data in all previous sequence numbers, so retries may

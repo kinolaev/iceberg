@@ -45,6 +45,7 @@ import org.apache.iceberg.ManifestFile;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.ReplacePartitions;
 import org.apache.iceberg.RowDelta;
+import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.SnapshotUpdate;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableUtil;
@@ -362,6 +363,10 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
         // files to be concurrently removed, so there is no need to validate the files referenced by
         // the position delete files that are being committed.
         RowDelta rowDelta = table.newRowDelta().scanManifestsWith(workerPool);
+        Snapshot startingSnapshot = table.snapshot(branch);
+        if (startingSnapshot != null) {
+          rowDelta.validateFromSnapshot(startingSnapshot.snapshotId());
+        }
 
         Arrays.stream(result.dataFiles()).forEach(rowDelta::addRows);
         Arrays.stream(result.deleteFiles()).forEach(rowDelta::addDeletes);
